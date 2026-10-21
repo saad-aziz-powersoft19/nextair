@@ -8,6 +8,7 @@ interface LandingAlertProps {
   destination: Airport;
   aircraft: Aircraft;
   telemetry: LiveTelemetry;
+  isLayover?: boolean;
   onConfirmLanding: () => void;
   onDismiss: () => void;
 }
@@ -16,6 +17,7 @@ export default function LandingAlert({
   destination,
   aircraft,
   telemetry,
+  isLayover = false,
   onConfirmLanding,
   onDismiss,
 }: LandingAlertProps) {
@@ -30,10 +32,10 @@ export default function LandingAlert({
             </div>
             <div>
               <div className="text-[10px] font-black uppercase tracking-widest text-black/80">
-                Air Traffic Control • Approach Clear
+                {isLayover ? 'Layover Refuel Stop • Approach Clear' : 'Air Traffic Control • Approach Clear'}
               </div>
               <h3 className="text-lg font-black tracking-tight text-white drop-shadow">
-                Initiate Landing Sequence?
+                {isLayover ? 'Land at Layover Stop?' : 'Initiate Landing Sequence?'}
               </h3>
             </div>
           </div>
@@ -47,6 +49,12 @@ export default function LandingAlert({
             <strong className="text-white font-bold">{destination.city}</strong> (
             <span className="text-amber-400 font-mono font-bold">{destination.code}</span>
             ). Ready to reduce throttles and begin glideslope descent.
+            {isLayover && (
+              <span className="block mt-1 text-amber-300">
+                This is a technical refueling stop — the flight continues to its final
+                destination after tanks are refilled.
+              </span>
+            )}
           </p>
 
           {/* Quick Telemetry Glance */}
@@ -74,7 +82,7 @@ export default function LandingAlert({
           <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-2 text-xs text-amber-200">
             <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <span>
-              Destination runway heading is{' '}
+              {isLayover ? 'Layover runway' : 'Destination runway'} heading is{' '}
               <strong className="text-white font-mono">{destination.runwayHeading}°</strong>.
               Upon confirmation, auto-throttles will decelerate and establish approach descent.
             </span>
@@ -93,7 +101,7 @@ export default function LandingAlert({
               className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-black font-extrabold text-xs rounded-xl shadow-lg shadow-emerald-500/20 flex items-center gap-2 transition-all transform active:scale-95"
             >
               <ArrowDownCircle className="w-4 h-4" />
-              <span>CLEAR FOR LANDING</span>
+              <span>{isLayover ? 'CLEAR FOR LAYOVER' : 'CLEAR FOR LANDING'}</span>
             </button>
           </div>
         </div>

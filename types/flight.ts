@@ -28,18 +28,32 @@ export interface Aircraft {
   passengerCapacity: number;
   wingspanMeters: number;
   description: string;
+  fuelCapacityKg: number; // Usable fuel capacity in kg
+  fuelBurnKgPerHour: number; // Nominal cruise fuel burn in kg/h
+  engineCount: number;
 }
 
 export type FlightPhase =
-  | 'PRE_FLIGHT' // Parked at departure gate
+  | 'PRE_FLIGHT' // Cold & dark at departure gate
+  | 'TAXI' // Taxiing to the active runway
   | 'TAXI_TAKEOFF' // Accelerating on runway and initial liftoff
   | 'CLIMB' // Climbing to cruise altitude
-  | 'CRUISE' // Level cruise along Great Circle route
+  | 'CRUISE' // Level cruise along filed navigation route
+  | 'EMERGENCY_DESCENT' // Emergency descent to a safe cabin altitude
   | 'APPROACH_READY' // Within descent threshold, waiting for user land command
   | 'DESCENT' // Descending to approach altitude
   | 'FINAL_APPROACH' // Final alignment and descent to runway
   | 'TOUCHDOWN_ROLLOUT' // Landing rollout, braking
   | 'ARRIVED'; // Flight finished at gate
+
+export type EngineState = 'OFF' | 'STARTING' | 'RUNNING' | 'FAILED';
+
+export interface EngineStatus {
+  state: EngineState;
+  startRemainingSeconds: number;
+}
+
+export type FlightWaypointType = 'airport' | 'sid' | 'star' | 'navaid' | 'oceanic';
 
 export interface FlightWaypoint {
   lat: number;
@@ -47,6 +61,29 @@ export interface FlightWaypoint {
   distanceFromOriginKm: number;
   bearing: number;
   targetAltitudeFt: number;
+  name?: string;
+  type?: FlightWaypointType;
+}
+
+export interface FuelPlan {
+  tripFuelKg: number;
+  contingencyFuelKg: number;
+  alternateFuelKg: number;
+  finalReserveKg: number;
+  taxiFuelKg: number;
+  totalRequiredKg: number;
+  fuelOnBoardKg: number;
+  alternateAirport: Airport | null;
+  alternateDistanceKm: number;
+  routeDistanceKm?: number;
+  maxRangeKm?: number;
+}
+
+export interface LayoverStop {
+  airport: Airport;
+  distanceFromOriginKm: number;
+  leg1FuelPlan: FuelPlan;
+  leg2FuelPlan: FuelPlan;
 }
 
 export interface FlightPlan {
@@ -58,6 +95,11 @@ export interface FlightPlan {
   estimatedFlightTimeHours: number;
   waypoints: FlightWaypoint[];
   departureTime: Date;
+  airline?: { code: string; name: string };
+  flightNumber?: string;
+  isRealWorldRoute?: boolean;
+  fuel?: FuelPlan;
+  layover?: LayoverStop;
 }
 
 export interface LiveTelemetry {
@@ -75,7 +117,33 @@ export interface LiveTelemetry {
   elapsedSimSeconds: number;
   etaSecondsRemaining: number;
   phase: FlightPhase;
+  legIndex: number; // 1 = first leg, 2 = after a layover/refuel stop
+  fuelRemainingKg: number;
+  fuelUsedKg: number;
+  fuelFlowKgPerHour: number;
+  engines: EngineStatus[];
+  batteryOn: boolean;
+  beaconOn: boolean;
+  fuelPumpsOn: boolean;
+  parkingBrake: boolean;
+  flaps: number; // 0-4 notches
+  gearDown: boolean;
+  speedbrake: number; // 0-100 percent deployed
+  cabinAltitudeFt?: number;
 }
+
+export type SystemsPatch = Partial<
+  Pick<
+    LiveTelemetry,
+    | 'batteryOn'
+    | 'beaconOn'
+    | 'fuelPumpsOn'
+    | 'parkingBrake'
+    | 'flaps'
+    | 'gearDown'
+    | 'speedbrake'
+  >
+>;
 
 export type MapTileStyle =
   | 'radar'

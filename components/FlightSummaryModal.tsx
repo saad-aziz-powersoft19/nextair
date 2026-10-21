@@ -2,11 +2,24 @@
 
 import React from 'react';
 import { FlightPlan, LiveTelemetry } from '@/types/flight';
-import { Award, CheckCircle2, Plane, Clock, Navigation, Gauge, ArrowRight } from 'lucide-react';
+import { ScenarioEvaluation, ScenarioSession } from '@/types/scenario';
+import { getScenarioDefinition } from '@/lib/scenarios';
+import {
+  AlertTriangle,
+  Award,
+  CheckCircle2,
+  Plane,
+  Clock,
+  Navigation,
+  Gauge,
+  ArrowRight,
+} from 'lucide-react';
 
 interface FlightSummaryModalProps {
   flightPlan: FlightPlan;
   telemetry: LiveTelemetry;
+  scenario?: ScenarioSession | null;
+  scenarioEvaluation?: ScenarioEvaluation | null;
   onPlanNewFlight: () => void;
   onReplayFlight: () => void;
 }
@@ -14,10 +27,15 @@ interface FlightSummaryModalProps {
 export default function FlightSummaryModal({
   flightPlan,
   telemetry,
+  scenario,
+  scenarioEvaluation,
   onPlanNewFlight,
   onReplayFlight,
 }: FlightSummaryModalProps) {
   const { origin, destination, aircraft, totalDistanceKm } = flightPlan;
+  const scenarioDefinition = scenario
+    ? getScenarioDefinition(scenario.scenarioId)
+    : null;
 
   const hours = Math.floor(telemetry.elapsedSimSeconds / 3600);
   const minutes = Math.floor((telemetry.elapsedSimSeconds % 3600) / 60);
@@ -72,6 +90,73 @@ export default function FlightSummaryModal({
               <div className="text-xs text-zinc-400">{destination.city}, {destination.country}</div>
             </div>
           </div>
+
+          {scenario &&
+            scenario.mode === 'CHECKRIDE' &&
+            scenarioEvaluation &&
+            scenarioDefinition && (
+              <div
+                className={`p-4 rounded-xl border ${
+                  scenarioEvaluation.passed
+                    ? 'bg-emerald-950/40 border-emerald-700/60'
+                    : 'bg-amber-950/40 border-amber-700/60'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div
+                      className={`p-2 rounded-lg ${
+                        scenarioEvaluation.passed
+                          ? 'bg-emerald-500/15 text-emerald-300'
+                          : 'bg-amber-500/15 text-amber-300'
+                      }`}
+                    >
+                      {scenarioEvaluation.passed ? (
+                        <CheckCircle2 className="w-5 h-5" />
+                      ) : (
+                        <AlertTriangle className="w-5 h-5" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                        Checkride
+                      </div>
+                      <div className="text-sm font-black text-white">
+                        {scenarioDefinition.title} —{' '}
+                        {scenarioEvaluation.passed ? 'PASSED' : 'NOT PASSED'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div
+                      className={`text-2xl font-black font-mono ${
+                        scenarioEvaluation.passed
+                          ? 'text-emerald-300'
+                          : 'text-amber-300'
+                      }`}
+                    >
+                      {scenarioEvaluation.score}
+                    </div>
+                    <div className="text-[9px] font-mono text-zinc-500">
+                      /100
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-3">
+                  {scenarioEvaluation.objectives.map((objective) => (
+                    <div
+                      key={objective.id}
+                      className={`flex items-center gap-1.5 text-[10px] font-mono ${
+                        objective.met ? 'text-emerald-300' : 'text-rose-300'
+                      }`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
+                      <span>{objective.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
           {/* Statistics Grid */}
           <div className="grid grid-cols-2 gap-3">

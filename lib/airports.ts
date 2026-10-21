@@ -1,4 +1,4 @@
-import { Airport } from '@/types/flight';
+import { Airport } from '../types/flight';
 
 export const AIRPORTS: Airport[] = [
   // North America
@@ -295,6 +295,42 @@ export const AIRPORTS: Airport[] = [
     lng: 72.8656,
     elevation: 39,
     runwayHeading: 270,
+  },
+  {
+    code: 'KHI',
+    icao: 'OPKC',
+    name: 'Jinnah International Airport',
+    city: 'Karachi',
+    country: 'Pakistan',
+    countryCode: 'PK',
+    lat: 24.9065,
+    lng: 67.1608,
+    elevation: 100,
+    runwayHeading: 251,
+  },
+  {
+    code: 'LHE',
+    icao: 'OPLA',
+    name: 'Allama Iqbal International Airport',
+    city: 'Lahore',
+    country: 'Pakistan',
+    countryCode: 'PK',
+    lat: 31.5216,
+    lng: 74.4036,
+    elevation: 712,
+    runwayHeading: 359,
+  },
+  {
+    code: 'ISB',
+    icao: 'OPIS',
+    name: 'Islamabad International Airport',
+    city: 'Islamabad',
+    country: 'Pakistan',
+    countryCode: 'PK',
+    lat: 33.5606,
+    lng: 72.8258,
+    elevation: 1761,
+    runwayHeading: 280,
   },
   {
     code: 'PKX',

@@ -4,12 +4,22 @@ import React, { useState } from 'react';
 import {
   FlightPlan,
   LiveTelemetry,
-  FlightPhase,
+  SystemsPatch,
 } from '@/types/flight';
+import {
+  ScenarioId,
+  ScenarioMode,
+  ScenarioSession,
+} from '@/types/scenario';
 import {
   getPhaseDisplay,
   TIME_MULTIPLIERS,
 } from '@/lib/simulation';
+import { isGroundPhase } from '@/lib/ground';
+import GroundOpsPanel from '@/components/GroundOpsPanel';
+import ChecklistPanel from '@/components/ChecklistPanel';
+import FlightControls from '@/components/FlightControls';
+import ScenarioPanel, { ScenarioLauncher } from '@/components/ScenarioPanel';
 import {
   Play,
   Pause,
@@ -23,9 +33,11 @@ import {
   Navigation,
   Compass,
   AlertCircle,
+  AlertTriangle,
   ShieldCheck,
   ChevronDown,
   ChevronUp,
+  Fuel,
 } from 'lucide-react';
 
 interface CockpitHUDProps {
@@ -34,12 +46,20 @@ interface CockpitHUDProps {
   isPlaying: boolean;
   timeMultiplier: number;
   autoLandEnabled: boolean;
+  scenario: ScenarioSession | null;
   onTogglePlay: () => void;
   onSetTimeMultiplier: (multiplier: number) => void;
   onReset: () => void;
   onToggleAutoLand: () => void;
   onInitiateLanding: () => void;
   onNewFlight: () => void;
+  onUpdateSystems: (patch: SystemsPatch) => void;
+  onToggleEngine: (index: number) => void;
+  onStartTaxi: () => void;
+  onBeginTakeoff: () => void;
+  onStartScenario: (id: ScenarioId, mode: ScenarioMode) => void;
+  onScenarioStep: (stepId: string) => void;
+  onEndScenario: () => void;
 }
 
 export default function CockpitHUD({
@@ -48,16 +68,50 @@ export default function CockpitHUD({
   isPlaying,
   timeMultiplier,
   autoLandEnabled,
+  scenario,
   onTogglePlay,
   onSetTimeMultiplier,
   onReset,
   onToggleAutoLand,
   onInitiateLanding,
   onNewFlight,
+  onUpdateSystems,
+  onToggleEngine,
+  onStartTaxi,
+  onBeginTakeoff,
+  onStartScenario,
+  onScenarioStep,
+  onEndScenario,
 }: CockpitHUDProps) {
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
+  );
+  const [showScenarioLauncher, setShowScenarioLauncher] =
+    useState<boolean>(false);
   const { origin, destination, aircraft, totalDistanceKm } = flightPlan;
+  const layoverStop = flightPlan.layover ?? null;
+  const currentLeg = telemetry.legIndex ?? 1;
   const phaseInfo = getPhaseDisplay(telemetry.phase);
+  const gearJammed = scenario?.scenarioId === 'GEAR_JAM';
+  const failedEngineCount = (telemetry.engines ?? []).filter(
+    (engine) => engine.state === 'FAILED'
+  ).length;
+  const cabinAltitudeFt = telemetry.cabinAltitudeFt ?? 8000;
+  const handleStartScenario = (id: ScenarioId, mode: ScenarioMode) => {
+    setShowScenarioLauncher(false);
+    onStartScenario(id, mode);
+  };
+
+  const fuelOnBoardKg = flightPlan.fuel?.fuelOnBoardKg ?? aircraft.fuelCapacityKg ?? 0;
+  const fuelRemainingKg = telemetry.fuelRemainingKg ?? fuelOnBoardKg;
+  const fuelUsedKg = telemetry.fuelUsedKg ?? 0;
+  const fuelFlowKgPerHour = telemetry.fuelFlowKgPerHour ?? 0;
+  const fuelRatio = fuelOnBoardKg > 0 ? fuelRemainingKg / fuelOnBoardKg : 0;
+  const minReserveKg =
+    (flightPlan.fuel?.finalReserveKg ?? 0) + (flightPlan.fuel?.alternateFuelKg ?? 0);
+  const isFuelCritical = fuelOnBoardKg > 0 && fuelRemainingKg <= minReserveKg;
+  const isLowFuel =
+    fuelOnBoardKg > 0 && !isFuelCritical && fuelRemainingKg <= minReserveKg * 1.5;
 
   // Format seconds to HH:MM:SS
   const formatTime = (totalSeconds: number) => {
@@ -111,11 +165,30 @@ export default function CockpitHUD({
             <span className="text-base font-black text-emerald-400 font-mono">
               {origin.code}
             </span>
+            {layoverStop && (
+              <>
+                <Plane className="w-3.5 h-3.5 text-cyan-400 rotate-90" />
+                <span
+                  className={`text-base font-black font-mono ${
+                    currentLeg === 1 ? 'text-amber-300' : 'text-zinc-500'
+                  }`}
+                  title={`Layover stop${currentLeg === 2 ? ' (completed)' : ''}`}
+                >
+                  {layoverStop.airport.code}
+                </span>
+              </>
+            )}
             <Plane className="w-3.5 h-3.5 text-cyan-400 rotate-90" />
             <span className="text-base font-black text-rose-400 font-mono">
               {destination.code}
             </span>
           </div>
+
+          {flightPlan.flightNumber && (
+            <span className="hidden md:inline px-2 py-0.5 bg-emerald-950/50 border border-emerald-800/70 rounded text-[11px] font-mono font-bold text-emerald-300">
+              {flightPlan.flightNumber}
+            </span>
+          )}
 
           <div className="hidden sm:flex items-center gap-3 border-l border-zinc-800 pl-3 text-xs font-mono">
             <div>
@@ -134,10 +207,30 @@ export default function CockpitHUD({
               <span className="text-zinc-500 text-[10px] block">DIST</span>
               <span className="font-bold text-white">{Math.round(telemetry.distanceRemainingKm)} KM</span>
             </div>
+            <div>
+              <span className="text-zinc-500 text-[10px] block">FUEL</span>
+              <span
+                className={`font-bold ${
+                  isFuelCritical ? 'text-rose-400' : isLowFuel ? 'text-amber-300' : 'text-white'
+                }`}
+              >
+                {Math.round(fuelRemainingKg).toLocaleString()} KG
+              </span>
+            </div>
           </div>
         </div>
 
         {/* Action button if near destination */}
+        {scenario && (
+          <button
+            onClick={() => setIsMinimized(false)}
+            className="px-3 py-1 bg-rose-500 hover:bg-rose-400 text-black font-extrabold text-xs rounded-lg shadow-md animate-pulse flex items-center gap-1"
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>EMERGENCY</span>
+          </button>
+        )}
+
         {canInitiateLanding && (
           <button
             onClick={onInitiateLanding}
@@ -155,7 +248,7 @@ export default function CockpitHUD({
               <button
                 key={m}
                 onClick={() => onSetTimeMultiplier(m)}
-                className={`px-1.5 py-0.5 rounded font-bold transition-all ${
+                className={`px-2 py-1 sm:px-1.5 sm:py-0.5 rounded font-bold transition-all touch-manipulation ${
                   timeMultiplier === m
                     ? 'bg-cyan-500 text-black'
                     : 'text-zinc-400 hover:text-white'
@@ -181,7 +274,7 @@ export default function CockpitHUD({
 
   // Full Avionics Glass Cockpit Dock
   return (
-    <div className="w-full bg-zinc-950/90 backdrop-blur-xl border border-zinc-800/90 rounded-2xl p-4 shadow-[0_15px_45px_rgba(0,0,0,0.85)] text-zinc-100 flex flex-col gap-3.5 animate-in fade-in duration-200">
+    <div className="w-full max-h-[82dvh] overflow-y-auto overscroll-contain bg-zinc-950/90 backdrop-blur-xl border border-zinc-800/90 rounded-2xl p-3 sm:p-4 shadow-[0_15px_45px_rgba(0,0,0,0.85)] text-zinc-100 flex flex-col gap-3.5 animate-in fade-in duration-200">
       {/* Upper Cockpit Ribbon: Route, Aircraft, Phase Badge & Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-2.5 border-b border-zinc-800/80">
         {/* Origin to Destination Summary */}
@@ -191,6 +284,22 @@ export default function CockpitHUD({
               {origin.code}
             </span>
             <span className="text-xs text-zinc-400 font-medium">({origin.city})</span>
+            {layoverStop && (
+              <>
+                <Plane className="w-4 h-4 text-amber-400 rotate-90" />
+                <span
+                  className={`text-lg font-black font-mono tracking-wider ${
+                    currentLeg === 1 ? 'text-amber-300 animate-pulse' : 'text-zinc-500'
+                  }`}
+                  title={`Refuel layover${currentLeg === 2 ? ' — completed' : ''}`}
+                >
+                  {layoverStop.airport.code}
+                </span>
+                <span className="text-[10px] text-amber-500/80 uppercase font-bold">
+                  {currentLeg === 1 ? 'stop' : 'done'}
+                </span>
+              </>
+            )}
             <Plane className="w-4 h-4 text-cyan-400 rotate-90" />
             <span className="text-xl font-black text-rose-400 font-mono tracking-wider">
               {destination.code}
@@ -198,10 +307,32 @@ export default function CockpitHUD({
             <span className="text-xs text-zinc-400 font-medium">({destination.city})</span>
           </div>
 
+          {layoverStop && (
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-amber-950/40 rounded-md border border-amber-800/70 text-xs">
+              <span className="text-amber-500 font-medium">Layover:</span>
+              <span className="text-amber-300 font-bold font-mono">
+                {layoverStop.airport.code}
+              </span>
+              <span className="text-zinc-500">· Leg {Math.min(currentLeg, 2)}/2</span>
+            </div>
+          )}
+
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-zinc-900/80 rounded-md border border-zinc-800 text-xs">
             <span className="text-zinc-400 font-medium">Aircraft:</span>
             <span className="text-cyan-300 font-bold">{aircraft.name}</span>
           </div>
+
+          {flightPlan.flightNumber && (
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-zinc-900/80 rounded-md border border-zinc-800 text-xs">
+              <span className="text-zinc-400 font-medium">Flight:</span>
+              <span className="text-emerald-300 font-bold font-mono">
+                {flightPlan.flightNumber}
+              </span>
+              {flightPlan.airline && (
+                <span className="text-zinc-500">• {flightPlan.airline.name}</span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Phase Badge & Actions */}
@@ -217,12 +348,61 @@ export default function CockpitHUD({
             </button>
           )}
 
+          {/* Fuel Warning Badges */}
+          {isFuelCritical ? (
+            <div className="px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 bg-rose-950/70 border-rose-700 text-rose-300 animate-pulse">
+              <Fuel className="w-3.5 h-3.5" />
+              <span>FUEL RESERVE</span>
+            </div>
+          ) : isLowFuel ? (
+            <div className="px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 bg-amber-950/70 border-amber-700 text-amber-300">
+              <Fuel className="w-3.5 h-3.5" />
+              <span>LOW FUEL</span>
+            </div>
+          ) : null}
+
+          {failedEngineCount > 0 && (
+            <div className="px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 bg-rose-950/70 border-rose-700 text-rose-300 animate-pulse">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>{failedEngineCount > 1 ? `${failedEngineCount} ENG FAIL` : 'ENG FAIL'}</span>
+            </div>
+          )}
+
+          {cabinAltitudeFt > 10000 && (
+            <div className="px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 bg-rose-950/70 border-rose-700 text-rose-300 animate-pulse">
+              <span>CABIN ALT {cabinAltitudeFt.toLocaleString()} FT</span>
+            </div>
+          )}
+
+          {(telemetry.phase === 'DESCENT' || telemetry.phase === 'FINAL_APPROACH') &&
+            !telemetry.gearDown && (
+              <div className="px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 bg-rose-950/70 border-rose-700 text-rose-300 animate-pulse">
+                <span>GEAR UP</span>
+              </div>
+            )}
+
+          {telemetry.phase === 'FINAL_APPROACH' && (telemetry.flaps ?? 0) < 2 && (
+            <div className="px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 bg-amber-950/70 border-amber-700 text-amber-300">
+              <span>FLAPS LOW</span>
+            </div>
+          )}
+
           <div
             className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 shadow-sm ${phaseInfo.badgeClass}`}
           >
             <span className="w-2 h-2 rounded-full bg-current animate-ping"></span>
             <span>{phaseInfo.label}</span>
           </div>
+
+          <button
+            onClick={() => setShowScenarioLauncher(true)}
+            disabled={Boolean(scenario)}
+            className="px-3 py-1.5 bg-amber-950/50 hover:bg-amber-900/60 disabled:opacity-50 disabled:cursor-not-allowed text-amber-300 text-xs font-semibold rounded-lg border border-amber-700/60 transition-colors flex items-center gap-1.5"
+            title={scenario ? 'End the active drill before starting another' : 'Open instructor scenarios'}
+          >
+            <Gauge className="w-3.5 h-3.5" />
+            <span>Scenarios</span>
+          </button>
 
           <button
             onClick={onNewFlight}
@@ -249,7 +429,10 @@ export default function CockpitHUD({
           <span className="font-bold text-cyan-400">
             {telemetry.progressPercent.toFixed(1)}% Completed
           </span>
-          <span>{Math.round(telemetry.distanceRemainingKm)} km remaining</span>
+          <span>
+            {Math.round(telemetry.distanceRemainingKm)} km remaining
+            {layoverStop && currentLeg === 1 ? ` to ${layoverStop.airport.code}` : ''}
+          </span>
         </div>
         <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800 relative">
           <div
@@ -259,8 +442,42 @@ export default function CockpitHUD({
         </div>
       </div>
 
+      {scenario && (
+        <ScenarioPanel
+          scenario={scenario}
+          telemetry={telemetry}
+          onStep={onScenarioStep}
+          onEnd={onEndScenario}
+        />
+      )}
+
+      {/* Ground Operations & Checklists / Airborne Flight Controls */}
+      {isGroundPhase(telemetry.phase) ? (
+        <div className="flex flex-col lg:flex-row gap-2.5">
+          <div className="flex-1 min-w-0">
+            <GroundOpsPanel
+              telemetry={telemetry}
+              onUpdateSystems={onUpdateSystems}
+              onToggleEngine={onToggleEngine}
+              onStartTaxi={onStartTaxi}
+              onBeginTakeoff={onBeginTakeoff}
+            />
+          </div>
+          <div className="lg:w-[340px] shrink-0">
+            <ChecklistPanel telemetry={telemetry} />
+          </div>
+        </div>
+      ) : telemetry.phase !== 'TOUCHDOWN_ROLLOUT' && telemetry.phase !== 'ARRIVED' ? (
+        <FlightControls
+          telemetry={telemetry}
+          originElevationFt={origin.elevation}
+          gearJammed={gearJammed}
+          onUpdateSystems={onUpdateSystems}
+        />
+      ) : null}
+
       {/* Primary Flight Display (PFD) Avionics Instrument Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-2.5">
         {/* 1. Altitude */}
         <div className="bg-zinc-900/70 border border-zinc-800 rounded-xl p-2.5 flex flex-col justify-between">
           <div className="flex items-center justify-between text-zinc-400 text-xs font-medium">
@@ -364,6 +581,46 @@ export default function CockpitHUD({
             <span>Until Touchdown</span>
           </div>
         </div>
+
+        {/* 7. Fuel On Board */}
+        <div className="bg-zinc-900/70 border border-zinc-800 rounded-xl p-2.5 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-zinc-400 text-xs font-medium">
+            <span>FUEL</span>
+            <Fuel
+              className={`w-3.5 h-3.5 ${
+                isFuelCritical ? 'text-rose-400 animate-pulse' : 'text-zinc-500'
+              }`}
+            />
+          </div>
+          <div className="mt-0.5 flex items-baseline justify-between">
+            <span
+              className={`text-xl sm:text-2xl font-black font-mono ${
+                isFuelCritical ? 'text-rose-400' : isLowFuel ? 'text-amber-300' : 'text-white'
+              }`}
+            >
+              {Math.round(fuelRemainingKg).toLocaleString()}
+            </span>
+            <span className="text-xs text-zinc-400 font-mono">KG</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="w-full h-1.5 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800">
+              <div
+                className={`h-full transition-all duration-300 ${
+                  isFuelCritical
+                    ? 'bg-rose-500'
+                    : isLowFuel
+                    ? 'bg-amber-400'
+                    : 'bg-gradient-to-r from-amber-400 to-emerald-400'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(0, fuelRatio * 100))}%` }}
+              />
+            </div>
+            <div className="text-[10px] text-zinc-400 flex justify-between">
+              <span>{fuelFlowKgPerHour.toLocaleString()} kg/h</span>
+              <span>{Math.round(fuelRatio * 100)}% • {Math.round(fuelUsedKg).toLocaleString()} kg used</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Simulation Controls: Play/Pause, Speed Warp, Auto-Land */}
@@ -389,7 +646,7 @@ export default function CockpitHUD({
             ) : (
               <>
                 <Play className="w-4 h-4 fill-current" />
-                <span>{telemetry.phase === 'PRE_FLIGHT' ? 'TAKEOFF & FLY' : 'RESUME'}</span>
+                <span>RESUME</span>
               </>
             )}
           </button>
@@ -405,13 +662,15 @@ export default function CockpitHUD({
         </div>
 
         {/* Time Multiplier (Warp Speed) */}
-        <div className="flex items-center gap-1.5 bg-zinc-900/80 p-1.5 rounded-xl border border-zinc-800">
-          <span className="text-xs font-semibold text-zinc-400 px-2">Time Warp:</span>
+        <div className="flex items-center gap-1.5 bg-zinc-900/80 p-1.5 rounded-xl border border-zinc-800 max-w-full overflow-x-auto">
+          <span className="text-xs font-semibold text-zinc-400 px-2 hidden sm:inline">
+            Time Warp:
+          </span>
           {TIME_MULTIPLIERS.map((multiplier) => (
             <button
               key={multiplier}
               onClick={() => onSetTimeMultiplier(multiplier)}
-              className={`px-2.5 py-1 text-xs font-mono font-bold rounded-lg transition-all ${
+              className={`px-2.5 py-1.5 sm:py-1 text-xs font-mono font-bold rounded-lg transition-all shrink-0 touch-manipulation ${
                 timeMultiplier === multiplier
                   ? 'bg-cyan-500 text-black shadow-[0_0_8px_rgba(34,211,238,0.5)]'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
@@ -438,6 +697,13 @@ export default function CockpitHUD({
           </button>
         </div>
       </div>
+
+      <ScenarioLauncher
+        open={showScenarioLauncher}
+        telemetry={telemetry}
+        onClose={() => setShowScenarioLauncher(false)}
+        onStart={handleStartScenario}
+      />
     </div>
   );
 }

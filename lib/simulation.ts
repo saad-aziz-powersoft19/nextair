@@ -2,15 +2,22 @@ import {
   FlightPlan,
   FlightPhase,
   LiveTelemetry,
-  Airport,
-  Aircraft,
-} from '@/types/flight';
+} from '../types/flight';
+import { ScenarioSimulationContext } from '../types/scenario';
 import {
   calculateBearing,
-  calculateDistanceKm,
+  interpolateAlongPath,
   interpolateGreatCirclePoint,
   KM_TO_NAUTICAL_MILES,
 } from './geodesics';
+import { getFuelFlowKgPerHour } from './fuel';
+import {
+  TAXI_DISTANCE_KM,
+  TAXI_SPEED_KMH,
+  areEnginesRunning,
+  createEngineStatuses,
+  getConfigurationDragFactor,
+} from './ground';
 
 export interface SimulationState {
   flightPlan: FlightPlan;
@@ -29,6 +36,7 @@ export const TIME_MULTIPLIERS = [1, 5, 10, 25, 50, 100, 250, 500];
  */
 export function getInitialTelemetry(flightPlan: FlightPlan): LiveTelemetry {
   const { origin, aircraft, totalDistanceKm } = flightPlan;
+  const fuelOnBoardKg = flightPlan.fuel?.fuelOnBoardKg ?? aircraft.fuelCapacityKg ?? 0;
 
   return {
     lat: origin.lat,
@@ -45,6 +53,19 @@ export function getInitialTelemetry(flightPlan: FlightPlan): LiveTelemetry {
     elapsedSimSeconds: 0,
     etaSecondsRemaining: (totalDistanceKm / aircraft.cruiseSpeedKmh) * 3600,
     phase: 'PRE_FLIGHT',
+    legIndex: 1,
+    fuelRemainingKg: fuelOnBoardKg,
+    fuelUsedKg: 0,
+    fuelFlowKgPerHour: 0,
+    engines: createEngineStatuses(aircraft.engineCount ?? 2),
+    batteryOn: false,
+    beaconOn: false,
+    fuelPumpsOn: false,
+    parkingBrake: true,
+    flaps: 0,
+    gearDown: true,
+    speedbrake: 0,
+    cabinAltitudeFt: 8000,
   };
 }
 
@@ -69,21 +90,37 @@ export function stepSimulation(
   current: LiveTelemetry,
   flightPlan: FlightPlan,
   deltaSimSeconds: number,
-  isApproachCleared: boolean
+  isApproachCleared: boolean,
+  scenario: ScenarioSimulationContext | null = null
 ): { telemetry: LiveTelemetry; showLandingPrompt: boolean } {
   if (current.phase === 'ARRIVED') {
     return { telemetry: current, showLandingPrompt: false };
   }
 
   const { origin, destination, aircraft, totalDistanceKm } = flightPlan;
+  const layover = flightPlan.layover ?? null;
+  let legIndex = current.legIndex ?? 1;
+  const onLayoverLeg = Boolean(layover && legIndex === 1);
+  const depressurization = scenario?.scenarioId === 'DEPRESSURIZATION';
+  const emergencyDescentStarted = Boolean(scenario?.emergencyDescentStarted);
+  const emergencyLevelOffFt = 10000;
+
+  // While flying the first leg, the active target is the refueling stop
+  const targetAirport = onLayoverLeg && layover ? layover.airport : destination;
+  const targetDistanceKm =
+    onLayoverLeg && layover ? layover.distanceFromOriginKm : totalDistanceKm;
+
   const todDistanceKm = calculateTopDescentKm(
-    aircraft.cruiseAltitudeFt,
-    destination.elevation
+    emergencyDescentStarted
+      ? Math.min(aircraft.cruiseAltitudeFt, emergencyLevelOffFt)
+      : aircraft.cruiseAltitudeFt,
+    targetAirport.elevation
   );
 
   let newPhase: FlightPhase = current.phase;
   let newDistTraveled = current.distanceTraveledKm;
   let showLandingPrompt = false;
+  let completedLayover = false;
 
   // 1. Phase Determination & Speed / Altitude dynamics
   let currentSpeedKmh = current.groundSpeedKmh;
@@ -92,51 +129,130 @@ export function stepSimulation(
 
   const cruiseSpeedKmh = aircraft.cruiseSpeedKmh;
   const cruiseAltFt = aircraft.cruiseAltitudeFt;
-  const destElevFt = destination.elevation;
+  const destElevFt = targetAirport.elevation;
   const origElevFt = origin.elevation;
 
-  // Check if we are near destination and need landing clearance
-  const distRemaining = Math.max(0, totalDistanceKm - newDistTraveled);
+  // Check if we are near the active target airport and need landing clearance
+  const distRemaining = Math.max(0, targetDistanceKm - newDistTraveled);
+
+  const engines = (current.engines ?? createEngineStatuses(aircraft.engineCount ?? 2)).map(
+    (engine) => {
+      if (engine.state !== 'STARTING') return engine;
+      const remaining = engine.startRemainingSeconds - deltaSimSeconds;
+      if (remaining <= 0) return { state: 'RUNNING' as const, startRemainingSeconds: 0 };
+      return { ...engine, startRemainingSeconds: remaining };
+    }
+  );
+  const allEnginesRunning = areEnginesRunning(engines);
+  const totalEngines = Math.max(1, engines.length || aircraft.engineCount || 1);
+  const runningEngineCount = engines.filter(
+    (engine) => engine.state === 'RUNNING'
+  ).length;
+  const runningEngineRatio = runningEngineCount / totalEngines;
+  const enginePerformance =
+    runningEngineCount === totalEngines
+      ? 1
+      : 0.55 + 0.45 * runningEngineRatio;
+
+  const flaps = Math.max(0, Math.min(4, current.flaps ?? 0));
+  const gearDown = current.gearDown ?? false;
+  const speedbrake = Math.max(0, Math.min(100, current.speedbrake ?? 0));
+  const configDrag = getConfigurationDragFactor(flaps, gearDown, speedbrake);
 
   if (current.phase === 'PRE_FLIGHT') {
-    // Initiate takeoff roll
-    newPhase = 'TAXI_TAKEOFF';
-    currentSpeedKmh = 50; // Initial roll
+    newPhase = 'PRE_FLIGHT';
+    currentSpeedKmh = 0;
+    currentAltFt = origElevFt;
     vsiFtMin = 0;
+  } else if (current.phase === 'TAXI') {
+    currentAltFt = origElevFt;
+    vsiFtMin = 0;
+    const taxiDone = newDistTraveled >= TAXI_DISTANCE_KM - 0.001;
+    currentSpeedKmh =
+      !taxiDone && allEnginesRunning && !current.parkingBrake ? TAXI_SPEED_KMH : 0;
   } else if (current.phase === 'TAXI_TAKEOFF') {
     // Accelerate to rotation speed and climb off ground
+    const takeoffElevFt = layover && legIndex === 2 ? layover.airport.elevation : origElevFt;
     const vrKmh = aircraft.takeoffSpeedKnots * 1.852;
     currentSpeedKmh = Math.min(vrKmh * 1.2, currentSpeedKmh + 25 * (deltaSimSeconds / 2));
     vsiFtMin = aircraft.climbRateFtMin * 0.6;
-    currentAltFt = Math.min(origElevFt + 3000, currentAltFt + (vsiFtMin / 60) * deltaSimSeconds);
+    currentAltFt = Math.min(
+      takeoffElevFt + 3000,
+      currentAltFt + (vsiFtMin / 60) * deltaSimSeconds
+    );
 
-    if (currentAltFt >= origElevFt + 2500 && currentSpeedKmh >= vrKmh) {
+    if (currentAltFt >= takeoffElevFt + 2500 && currentSpeedKmh >= vrKmh) {
       newPhase = 'CLIMB';
     }
   } else if (current.phase === 'CLIMB') {
     // Climbing to cruise altitude, accelerating to cruise speed
+    const climbTargetKmh = cruiseSpeedKmh * configDrag * enginePerformance;
     currentSpeedKmh = Math.min(
-      cruiseSpeedKmh,
-      currentSpeedKmh + (cruiseSpeedKmh - currentSpeedKmh) * 0.05 * deltaSimSeconds
+      climbTargetKmh,
+      currentSpeedKmh + (climbTargetKmh - currentSpeedKmh) * 0.05 * deltaSimSeconds
     );
-    vsiFtMin = aircraft.climbRateFtMin;
+    vsiFtMin = aircraft.climbRateFtMin * enginePerformance;
     currentAltFt = Math.min(cruiseAltFt, currentAltFt + (vsiFtMin / 60) * deltaSimSeconds);
 
     if (currentAltFt >= cruiseAltFt * 0.98) {
       currentAltFt = cruiseAltFt;
-      currentSpeedKmh = cruiseSpeedKmh;
+      currentSpeedKmh = cruiseSpeedKmh * configDrag * enginePerformance;
       vsiFtMin = 0;
       newPhase = 'CRUISE';
     }
   } else if (current.phase === 'CRUISE') {
-    currentSpeedKmh = cruiseSpeedKmh;
-    currentAltFt = cruiseAltFt;
-    vsiFtMin = 0;
+    currentSpeedKmh = cruiseSpeedKmh * configDrag * enginePerformance;
+    const emergencyHoldAltFt = emergencyDescentStarted
+      ? emergencyLevelOffFt
+      : cruiseAltFt;
+
+    if (currentAltFt > emergencyHoldAltFt + 50) {
+      vsiFtMin = emergencyDescentStarted ? -1800 : -250;
+      currentAltFt = Math.max(
+        emergencyHoldAltFt,
+        currentAltFt + (vsiFtMin / 60) * deltaSimSeconds
+      );
+    } else if (currentAltFt < cruiseAltFt - 50 && !emergencyDescentStarted) {
+      vsiFtMin = aircraft.climbRateFtMin * 0.7;
+      currentAltFt = Math.min(
+        cruiseAltFt,
+        currentAltFt + (vsiFtMin / 60) * deltaSimSeconds
+      );
+    } else {
+      currentAltFt = emergencyHoldAltFt;
+      vsiFtMin = 0;
+    }
 
     // Check if entering Top-Of-Descent window
     if (distRemaining <= todDistanceKm) {
       newPhase = 'APPROACH_READY';
       showLandingPrompt = true;
+    }
+  } else if (current.phase === 'EMERGENCY_DESCENT') {
+    const emergencyTargetKmh = cruiseSpeedKmh * 0.8;
+    if (currentSpeedKmh > emergencyTargetKmh) {
+      currentSpeedKmh = Math.max(
+        emergencyTargetKmh,
+        currentSpeedKmh - 12 * deltaSimSeconds
+      );
+    } else {
+      currentSpeedKmh = Math.min(
+        emergencyTargetKmh,
+        currentSpeedKmh + 8 * deltaSimSeconds
+      );
+    }
+
+    vsiFtMin = -Math.max(2500, aircraft.descentRateFtMin * 2);
+    currentAltFt = Math.max(
+      emergencyLevelOffFt,
+      currentAltFt + (vsiFtMin / 60) * deltaSimSeconds
+    );
+
+    if (currentAltFt <= emergencyLevelOffFt + 50) {
+      currentAltFt = emergencyLevelOffFt;
+      currentSpeedKmh = Math.min(currentSpeedKmh, cruiseSpeedKmh * 0.72);
+      vsiFtMin = 0;
+      newPhase = 'CRUISE';
     }
   } else if (current.phase === 'APPROACH_READY') {
     if (isApproachCleared) {
@@ -145,7 +261,7 @@ export function stepSimulation(
     } else {
       // Hold level or gentle preliminary descent while waiting for clearance
       showLandingPrompt = true;
-      currentSpeedKmh = cruiseSpeedKmh * 0.95;
+      currentSpeedKmh = cruiseSpeedKmh * 0.95 * configDrag * enginePerformance;
     }
   } else if (current.phase === 'DESCENT') {
     // Descend towards 3,000 ft AGL and decelerate to approach speed
@@ -155,7 +271,7 @@ export function stepSimulation(
       currentSpeedKmh - (currentSpeedKmh - approachSpeedKmh) * 0.04 * deltaSimSeconds
     );
 
-    vsiFtMin = -aircraft.descentRateFtMin;
+    vsiFtMin = -aircraft.descentRateFtMin * (1 + (speedbrake / 100) * 0.5);
     const targetApproachAlt = destElevFt + 2500;
     currentAltFt = Math.max(
       targetApproachAlt,
@@ -167,14 +283,14 @@ export function stepSimulation(
     }
   } else if (current.phase === 'FINAL_APPROACH') {
     // Final glideslope alignment down to destination elevation
-    const vrefKmh = aircraft.landingSpeedKnots * 1.852;
+    const vrefKmh = aircraft.landingSpeedKnots * 1.852 * (1 - 0.015 * flaps);
     currentSpeedKmh = Math.max(
       vrefKmh,
       currentSpeedKmh - (currentSpeedKmh - vrefKmh) * 0.08 * deltaSimSeconds
     );
 
-    // Glideslope descent rate ~ 700 ft/min
-    vsiFtMin = -750;
+    // Glideslope descent rate ~ 700 ft/min, increased with speedbrake
+    vsiFtMin = -750 * (1 + (speedbrake / 100) * 0.3);
     currentAltFt = Math.max(
       destElevFt,
       currentAltFt + (vsiFtMin / 60) * deltaSimSeconds
@@ -188,63 +304,114 @@ export function stepSimulation(
     // Reverse thrust and wheel brakes
     currentAltFt = destElevFt;
     vsiFtMin = 0;
-    currentSpeedKmh = Math.max(25, currentSpeedKmh - 45 * deltaSimSeconds);
+    currentSpeedKmh = Math.max(
+      25,
+      currentSpeedKmh - 45 * (1 + speedbrake / 100) * deltaSimSeconds
+    );
 
     if (distRemaining <= 0.2 || currentSpeedKmh <= 30) {
       currentSpeedKmh = 0;
-      newPhase = 'ARRIVED';
-      newDistTraveled = totalDistanceKm;
+      if (onLayoverLeg && layover) {
+        // Technical stop: refuel and roll straight into the departure for leg 2
+        newDistTraveled = layover.distanceFromOriginKm;
+        currentAltFt = layover.airport.elevation;
+        newPhase = 'TAXI_TAKEOFF';
+        legIndex = 2;
+        completedLayover = true;
+      } else {
+        newPhase = 'ARRIVED';
+        newDistTraveled = totalDistanceKm;
+      }
     }
   }
 
-  // 2. Advance distance traveled along great circle route based on current speed
+  // 2. Fuel burn based on active-phase flow rate (idle burn once engines spin at the gate)
+  const engineIdle =
+    newPhase === 'PRE_FLIGHT' && engines.some((engine) => engine.state !== 'OFF');
+  const fuelBurnFactor = allEnginesRunning
+    ? 1
+    : Math.max(0.6, enginePerformance);
+  const fuelFlowKgPerHour =
+    getFuelFlowKgPerHour(aircraft, engineIdle ? 'TAXI' : newPhase) *
+    fuelBurnFactor;
+  const fuelBurnKg = (fuelFlowKgPerHour / 3600) * deltaSimSeconds;
+  const startFuelKg = Number.isFinite(current.fuelRemainingKg)
+    ? current.fuelRemainingKg
+    : flightPlan.fuel?.fuelOnBoardKg ?? 0;
+  const remainingAfterBurnKg = Math.max(0, startFuelKg - fuelBurnKg);
+  const burnedKg = startFuelKg - remainingAfterBurnKg;
+  // Refuel to full tanks during the layover turnaround
+  const fuelRemainingKg = completedLayover
+    ? aircraft.fuelCapacityKg ?? flightPlan.fuel?.fuelOnBoardKg ?? remainingAfterBurnKg
+    : remainingAfterBurnKg;
+  const fuelUsedKg = (current.fuelUsedKg ?? 0) + burnedKg;
+
+  // 3. Advance distance traveled along the filed navigation route using current speed
   const kmPerSecond = currentSpeedKmh / 3600;
   newDistTraveled = Math.min(
     totalDistanceKm,
     newDistTraveled + kmPerSecond * deltaSimSeconds
   );
+  if (newPhase === 'TAXI') {
+    newDistTraveled = Math.min(newDistTraveled, TAXI_DISTANCE_KM);
+  }
 
   const updatedDistRemaining = Math.max(0, totalDistanceKm - newDistTraveled);
   const fraction = Math.min(1, newDistTraveled / Math.max(1, totalDistanceKm));
 
-  // 3. Current Geographical Coordinates on Great Circle
-  const currentPos = interpolateGreatCirclePoint(
-    origin.lat,
-    origin.lng,
-    destination.lat,
-    destination.lng,
-    fraction
-  );
-
-  // 4. Current Heading: bearing towards a forward waypoint along Great Circle
+  // 4. Current position along the waypoint path (falls back to great circle if plan has no route)
+  const routeWaypoints = flightPlan.waypoints;
+  let currentPos = { lat: origin.lat, lng: origin.lng };
   let newHeading = current.heading;
-  if (fraction < 0.999) {
-    const forwardPos = interpolateGreatCirclePoint(
+  if (routeWaypoints.length >= 2) {
+    const pathPos = interpolateAlongPath(routeWaypoints, newDistTraveled);
+    currentPos = { lat: pathPos.lat, lng: pathPos.lng };
+    newHeading = fraction >= 0.999 ? destination.runwayHeading : pathPos.heading;
+  } else {
+    currentPos = interpolateGreatCirclePoint(
       origin.lat,
       origin.lng,
       destination.lat,
       destination.lng,
-      Math.min(1, fraction + 0.005)
+      fraction
     );
-    newHeading = calculateBearing(
-      currentPos.lat,
-      currentPos.lng,
-      forwardPos.lat,
-      forwardPos.lng
-    );
-  } else {
-    newHeading = destination.runwayHeading;
+    if (fraction < 0.999) {
+      const forwardPos = interpolateGreatCirclePoint(
+        origin.lat,
+        origin.lng,
+        destination.lat,
+        destination.lng,
+        Math.min(1, fraction + 0.005)
+      );
+      newHeading = calculateBearing(
+        currentPos.lat,
+        currentPos.lng,
+        forwardPos.lat,
+        forwardPos.lng
+      );
+    } else {
+      newHeading = destination.runwayHeading;
+    }
   }
 
   // 5. Compute Mach number (speed of sound at altitude ~ 1060 km/h)
   const speedOfSoundKmh = 1062 - (currentAltFt / 30000) * 45;
   const mach = Math.round((currentSpeedKmh / speedOfSoundKmh) * 100) / 100;
+  const previousCabinAltitudeFt = current.cabinAltitudeFt ?? 8000;
+  const cabinAltitudeFt = depressurization
+    ? emergencyDescentStarted
+      ? Math.max(8000, previousCabinAltitudeFt - (1500 / 60) * deltaSimSeconds)
+      : Math.min(14000, previousCabinAltitudeFt + (1200 / 60) * deltaSimSeconds)
+    : 8000;
 
   const groundSpeedKnots = Math.round(currentSpeedKmh * 0.539957);
-  const etaSeconds =
-    currentSpeedKmh > 10
-      ? (updatedDistRemaining / currentSpeedKmh) * 3600
-      : 0;
+  const etaSpeedKmh =
+    newPhase === 'PRE_FLIGHT' || newPhase === 'TAXI' ? cruiseSpeedKmh : currentSpeedKmh;
+  const etaRemainingKm = Math.max(
+    0,
+    (completedLayover ? totalDistanceKm : targetDistanceKm) - newDistTraveled
+  );
+  const etaSeconds = etaSpeedKmh > 10 ? (etaRemainingKm / etaSpeedKmh) * 3600 : 0;
 
   const nextTelemetry: LiveTelemetry = {
     lat: currentPos.lat,
@@ -255,12 +422,25 @@ export function stepSimulation(
     mach,
     heading: Math.round(newHeading),
     verticalSpeedFtMin: Math.round(vsiFtMin),
-    distanceTraveledKm: Math.round(newDistTraveled * 10) / 10,
-    distanceRemainingKm: Math.round(updatedDistRemaining * 10) / 10,
+    distanceTraveledKm: newDistTraveled,
+    distanceRemainingKm: updatedDistRemaining,
     progressPercent: Math.round(fraction * 1000) / 10,
     elapsedSimSeconds: current.elapsedSimSeconds + deltaSimSeconds,
     etaSecondsRemaining: Math.round(etaSeconds),
     phase: newPhase,
+    legIndex,
+    fuelRemainingKg: Math.round(fuelRemainingKg * 10) / 10,
+    fuelUsedKg: Math.round(fuelUsedKg * 10) / 10,
+    fuelFlowKgPerHour,
+    engines,
+    batteryOn: current.batteryOn ?? false,
+    beaconOn: current.beaconOn ?? false,
+    fuelPumpsOn: current.fuelPumpsOn ?? false,
+    parkingBrake: current.parkingBrake ?? false,
+    flaps,
+    gearDown,
+    speedbrake,
+    cabinAltitudeFt: Math.round(cabinAltitudeFt),
   };
 
   return { telemetry: nextTelemetry, showLandingPrompt };
@@ -277,9 +457,15 @@ export function getPhaseDisplay(phase: FlightPhase): {
   switch (phase) {
     case 'PRE_FLIGHT':
       return {
-        label: 'Pre-Flight',
+        label: 'Cold & Dark',
         badgeClass: 'bg-zinc-700 text-zinc-300 border-zinc-600',
-        description: 'Parked at departure gate. Systems initialized.',
+        description: 'Parked at departure gate. Complete checklists and start engines.',
+      };
+    case 'TAXI':
+      return {
+        label: 'Taxiing',
+        badgeClass: 'bg-sky-950/80 text-sky-300 border-sky-600',
+        description: 'Taxiing to the active runway under own power.',
       };
     case 'TAXI_TAKEOFF':
       return {
@@ -297,7 +483,13 @@ export function getPhaseDisplay(phase: FlightPhase): {
       return {
         label: 'Cruising',
         badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-600',
-        description: 'Level flight following Great Circle airway.',
+        description: 'Level flight tracking the filed navigation route.',
+      };
+    case 'EMERGENCY_DESCENT':
+      return {
+        label: 'Emergency Descent',
+        badgeClass: 'bg-rose-950/90 text-rose-300 border-rose-500 animate-pulse',
+        description: 'Descending immediately to 10,000 ft for a depressurization.',
       };
     case 'APPROACH_READY':
       return {

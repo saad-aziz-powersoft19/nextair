@@ -1,4 +1,4 @@
-import { Airport, FlightWaypoint } from '@/types/flight';
+import { FlightWaypoint } from '../types/flight';
 
 export const EARTH_RADIUS_KM = 6371.0;
 export const KM_TO_NAUTICAL_MILES = 0.539957;
@@ -9,6 +9,13 @@ export function toRad(deg: number): number {
 
 export function toDeg(rad: number): number {
   return (rad * 180) / Math.PI;
+}
+
+export function normalizeLongitude(lng: number): number {
+  let normalized = lng;
+  while (normalized > 180) normalized -= 360;
+  while (normalized < -180) normalized += 360;
+  return normalized;
 }
 
 /**
@@ -104,70 +111,74 @@ export function interpolateGreatCirclePoint(
 }
 
 /**
- * Generates an array of waypoints along the Great Circle route
+ * Computes the destination point given a start point, initial bearing, and distance
  */
-export function generateGreatCircleRoute(
-  origin: Airport,
-  destination: Airport,
-  cruiseAltFt: number,
-  numSegments = 120
-): FlightWaypoint[] {
-  const totalDistKm = calculateDistanceKm(
-    origin.lat,
-    origin.lng,
-    destination.lat,
-    destination.lng
+export function destinationPoint(
+  lat: number,
+  lng: number,
+  bearingDeg: number,
+  distanceKm: number
+): { lat: number; lng: number } {
+  const angularDistance = distanceKm / EARTH_RADIUS_KM;
+  const theta = toRad(bearingDeg);
+  const phi1 = toRad(lat);
+  const lambda1 = toRad(lng);
+
+  const phi2 = Math.asin(
+    Math.sin(phi1) * Math.cos(angularDistance) +
+      Math.cos(phi1) * Math.sin(angularDistance) * Math.cos(theta)
   );
 
-  const waypoints: FlightWaypoint[] = [];
-
-  for (let i = 0; i <= numSegments; i++) {
-    const fraction = i / numSegments;
-    const pt = interpolateGreatCirclePoint(
-      origin.lat,
-      origin.lng,
-      destination.lat,
-      destination.lng,
-      fraction
+  const lambda2 =
+    lambda1 +
+    Math.atan2(
+      Math.sin(theta) * Math.sin(angularDistance) * Math.cos(phi1),
+      Math.cos(angularDistance) - Math.sin(phi1) * Math.sin(phi2)
     );
 
-    const distFromOrigin = totalDistKm * fraction;
+  return { lat: toDeg(phi2), lng: normalizeLongitude(toDeg(lambda2)) };
+}
 
-    // Calculate heading towards the next point (or arrival runway heading at last point)
-    let heading = 0;
-    if (i < numSegments) {
-      const nextPt = interpolateGreatCirclePoint(
-        origin.lat,
-        origin.lng,
-        destination.lat,
-        destination.lng,
-        (i + 1) / numSegments
-      );
-      heading = calculateBearing(pt.lat, pt.lng, nextPt.lat, nextPt.lng);
-    } else {
-      heading = destination.runwayHeading;
-    }
+/**
+ * Interpolates position and heading along a waypoint path by traveled distance.
+ * Handles antimeridian crossings and segments matching the drawn polyline geometry.
+ */
+export function interpolateAlongPath(
+  waypoints: FlightWaypoint[],
+  distanceKm: number
+): { lat: number; lng: number; heading: number } {
+  const first = waypoints[0];
+  const last = waypoints[waypoints.length - 1];
 
-    // Altitude profile target
-    let targetAlt = cruiseAltFt;
-    if (fraction < 0.15) {
-      targetAlt = origin.elevation + (cruiseAltFt - origin.elevation) * (fraction / 0.15);
-    } else if (fraction > 0.85) {
-      targetAlt =
-        destination.elevation +
-        (cruiseAltFt - destination.elevation) * ((1 - fraction) / 0.15);
-    }
-
-    waypoints.push({
-      lat: pt.lat,
-      lng: pt.lng,
-      distanceFromOriginKm: distFromOrigin,
-      bearing: heading,
-      targetAltitudeFt: Math.round(targetAlt),
-    });
+  if (waypoints.length < 2 || distanceKm <= first.distanceFromOriginKm) {
+    return { lat: first.lat, lng: first.lng, heading: first.bearing };
+  }
+  if (distanceKm >= last.distanceFromOriginKm) {
+    return { lat: last.lat, lng: last.lng, heading: last.bearing };
   }
 
-  return waypoints;
+  let segmentStart = first;
+  let segmentEnd = last;
+  for (let i = 1; i < waypoints.length; i++) {
+    if (distanceKm <= waypoints[i].distanceFromOriginKm) {
+      segmentStart = waypoints[i - 1];
+      segmentEnd = waypoints[i];
+      break;
+    }
+  }
+
+  const spanKm = segmentEnd.distanceFromOriginKm - segmentStart.distanceFromOriginKm;
+  const t = spanKm > 1e-6 ? (distanceKm - segmentStart.distanceFromOriginKm) / spanKm : 0;
+
+  let deltaLng = segmentEnd.lng - segmentStart.lng;
+  if (deltaLng > 180) deltaLng -= 360;
+  else if (deltaLng < -180) deltaLng += 360;
+
+  return {
+    lat: segmentStart.lat + (segmentEnd.lat - segmentStart.lat) * t,
+    lng: normalizeLongitude(segmentStart.lng + deltaLng * t),
+    heading: segmentStart.bearing,
+  };
 }
 
 /**

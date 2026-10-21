@@ -1,4 +1,4 @@
-import { Aircraft } from '@/types/flight';
+import { Aircraft } from '../types/flight';
 
 export const AIRCRAFT_FLEET: Aircraft[] = [
   {
@@ -19,6 +19,9 @@ export const AIRCRAFT_FLEET: Aircraft[] = [
     wingspanMeters: 60.1,
     description:
       'Advanced long-haul twin-engine jet made of carbon-fiber composites with high cruise efficiency and passenger comfort.',
+    fuelCapacityKg: 101456,
+    fuelBurnKgPerHour: 5950,
+    engineCount: 2,
   },
   {
     id: 'a350-900',
@@ -38,6 +41,9 @@ export const AIRCRAFT_FLEET: Aircraft[] = [
     wingspanMeters: 64.75,
     description:
       'Ultra-long-range wide-body airliner powered by Rolls-Royce Trent XWB engines, offering exceptional quietness and range.',
+    fuelCapacityKg: 112600,
+    fuelBurnKgPerHour: 6100,
+    engineCount: 2,
   },
   {
     id: 'b777-300er',
@@ -57,6 +63,53 @@ export const AIRCRAFT_FLEET: Aircraft[] = [
     wingspanMeters: 64.8,
     description:
       'The world’s most successful twin-engine long-haul aircraft, equipped with the massive GE90-115B turbofans.',
+    fuelCapacityKg: 145000,
+    fuelBurnKgPerHour: 8840,
+    engineCount: 2,
+  },
+  {
+    id: 'a380-800',
+    name: 'Airbus A380-800',
+    manufacturer: 'Airbus',
+    model: 'A380-800',
+    type: 'widebody',
+    cruiseSpeedKmh: 903,
+    cruiseSpeedKnots: 488,
+    maxRangeKm: 14800,
+    cruiseAltitudeFt: 41000,
+    climbRateFtMin: 2200,
+    descentRateFtMin: 1800,
+    takeoffSpeedKnots: 170,
+    landingSpeedKnots: 145,
+    passengerCapacity: 555,
+    wingspanMeters: 79.8,
+    description:
+      'Full-length double-deck giant with four Trent 900 engines, generous cabin space, and hub-to-hub long-haul economics.',
+    fuelCapacityKg: 253983,
+    fuelBurnKgPerHour: 11500,
+    engineCount: 4,
+  },
+  {
+    id: 'b777-200lr',
+    name: 'Boeing 777-200LR Worldliner',
+    manufacturer: 'Boeing',
+    model: '777-200LR',
+    type: 'widebody',
+    cruiseSpeedKmh: 905,
+    cruiseSpeedKnots: 489,
+    maxRangeKm: 15843,
+    cruiseAltitudeFt: 39000,
+    climbRateFtMin: 2400,
+    descentRateFtMin: 1800,
+    takeoffSpeedKnots: 166,
+    landingSpeedKnots: 145,
+    passengerCapacity: 317,
+    wingspanMeters: 64.8,
+    description:
+      'Ultra-long-range twin-engine widebody built for non-stop city pairs, with extra fuel capacity and GE90 power.',
+    fuelCapacityKg: 181283,
+    fuelBurnKgPerHour: 7300,
+    engineCount: 2,
   },
   {
     id: 'b737-800',
@@ -76,6 +129,9 @@ export const AIRCRAFT_FLEET: Aircraft[] = [
     wingspanMeters: 35.8,
     description:
       'The workhorse of global aviation, ideal for short-to-medium haul domestic and cross-border commercial routes.',
+    fuelCapacityKg: 20800,
+    fuelBurnKgPerHour: 2810,
+    engineCount: 2,
   },
   {
     id: 'a320neo',
@@ -95,6 +151,53 @@ export const AIRCRAFT_FLEET: Aircraft[] = [
     wingspanMeters: 35.8,
     description:
       'Modern single-aisle aircraft featuring Sharklets and high-bypass LEAP-1A / GTF geared turbofan engines.',
+    fuelCapacityKg: 18700,
+    fuelBurnKgPerHour: 2175,
+    engineCount: 2,
+  },
+  {
+    id: 'a321neo',
+    name: 'Airbus A321neo',
+    manufacturer: 'Airbus',
+    model: 'A321neo',
+    type: 'narrowbody',
+    cruiseSpeedKmh: 833,
+    cruiseSpeedKnots: 450,
+    maxRangeKm: 7400,
+    cruiseAltitudeFt: 37000,
+    climbRateFtMin: 2500,
+    descentRateFtMin: 1600,
+    takeoffSpeedKnots: 150,
+    landingSpeedKnots: 136,
+    passengerCapacity: 220,
+    wingspanMeters: 35.8,
+    description:
+      'Stretched single-aisle with new-generation engines and sharklets, capable of transatlantic range on thin routes.',
+    fuelCapacityKg: 23700,
+    fuelBurnKgPerHour: 2400,
+    engineCount: 2,
+  },
+  {
+    id: 'e195-e2',
+    name: 'Embraer E195-E2',
+    manufacturer: 'Embraer',
+    model: 'E195-E2',
+    type: 'narrowbody',
+    cruiseSpeedKmh: 833,
+    cruiseSpeedKnots: 450,
+    maxRangeKm: 4800,
+    cruiseAltitudeFt: 41000,
+    climbRateFtMin: 2800,
+    descentRateFtMin: 1700,
+    takeoffSpeedKnots: 143,
+    landingSpeedKnots: 133,
+    passengerCapacity: 132,
+    wingspanMeters: 35.1,
+    description:
+      'Modern regional jet with high-aspect-ratio wings and quiet geared turbofans, optimized for short and thin routes.',
+    fuelCapacityKg: 13500,
+    fuelBurnKgPerHour: 1500,
+    engineCount: 2,
   },
   {
     id: 'concorde',
@@ -114,6 +217,31 @@ export const AIRCRAFT_FLEET: Aircraft[] = [
     wingspanMeters: 25.6,
     description:
       'Legendary supersonic turbojet passenger airliner capable of transatlantic crossings in under 3.5 hours at Mach 2.04.',
+    fuelCapacityKg: 95680,
+    fuelBurnKgPerHour: 23500,
+    engineCount: 4,
+  },
+  {
+    id: 'g650er',
+    name: 'Gulfstream G650ER',
+    manufacturer: 'Gulfstream',
+    model: 'G650ER',
+    type: 'business',
+    cruiseSpeedKmh: 904,
+    cruiseSpeedKnots: 488,
+    maxRangeKm: 13890,
+    cruiseAltitudeFt: 51000,
+    climbRateFtMin: 3500,
+    descentRateFtMin: 2000,
+    takeoffSpeedKnots: 145,
+    landingSpeedKnots: 130,
+    passengerCapacity: 19,
+    wingspanMeters: 30.4,
+    description:
+      'Long-range executive jet with a high-altitude ceiling and near-airliner speed, built for non-stop intercontinental missions.',
+    fuelCapacityKg: 21863,
+    fuelBurnKgPerHour: 1250,
+    engineCount: 2,
   },
   {
     id: 'c172',
@@ -133,6 +261,9 @@ export const AIRCRAFT_FLEET: Aircraft[] = [
     wingspanMeters: 11.0,
     description:
       'The most popular single-engine general aviation aircraft in history, for scenic flights and pilot training.',
+    fuelCapacityKg: 150,
+    fuelBurnKgPerHour: 18,
+    engineCount: 1,
   },
 ];
 
